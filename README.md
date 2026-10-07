@@ -22,11 +22,15 @@ command-line API and to Telegram over HTTPS.
 
 | Command | What it does |
 |---|---|
-| `/agents` | Every agent, with its herdr space number and status |
+| `/agents` | Every agent and its status, with a button for each: tap one to talk to it |
 | `/to 2 fix the login bug` | Send one prompt to an agent |
-| `/use 2` | Pick an agent; after that, plain messages go to it |
+| `/use 2` | Pick an agent by typing instead of tapping; plain messages then go to it |
 | `/read` | The picked agent's latest screen (or `/read 2`, `/read 2 60` for 60 lines) |
 | `/help` | The list above |
+
+Type `/` in the chat for a menu of these. After you pick an agent, a **📄 Read its screen**
+button shows what it's doing. Buttons point at the agent itself, not its number, so a tap
+always reaches the agent you saw even if spaces were renumbered since.
 
 Agents are named after their herdr space: by number (`2`) or by name (`rex applicant`,
 or just the start of it, `cla`). A whole name beats a shorter one, so with spaces called
