@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -17,6 +18,7 @@ class Agent:
     label: str       # the workspace name, e.g. "rex applicant"
     pane: str        # what herdr's agent commands take as a target, e.g. "wY:p1"
     status: str      # idle, working, blocked, done or unknown
+    seq: int = 0     # herdr's state_change_seq: goes up whenever the status changes
 
     def name(self) -> str:
         return f"{self.number} · {self.label}"
@@ -52,18 +54,24 @@ def agents() -> list[Agent]:
             label=space.get("label") or a.get("terminal_title_stripped") or a["pane_id"],
             pane=a["pane_id"],
             status=a.get("agent_status", "unknown"),
+            seq=int(a.get("state_change_seq") or 0),
         ))
     return sorted(found, key=lambda a: (a.number, a.pane))
 
 
+def _norm(name: str) -> str:
+    """Lower case, single spaces: "Rex  Boi" and "rex boi" are the same name."""
+    return " ".join(name.lower().split())
+
+
 def find(all_agents: list[Agent], ref: str) -> Agent:
     """An agent by workspace number ("2") or by the start of its name ("rex a")."""
-    ref = ref.strip().lower()
-    if ref.isdigit():
+    ref = _norm(ref)
+    if ref.isdecimal():
         hits = [a for a in all_agents if a.number == int(ref)]
     else:
-        hits = [a for a in all_agents if a.label.lower() == ref] or \
-               [a for a in all_agents if a.label.lower().startswith(ref)]
+        hits = [a for a in all_agents if _norm(a.label) == ref] or \
+               [a for a in all_agents if _norm(a.label).startswith(ref)]
     if not hits:
         raise LookupError(f"no agent matches {ref!r}; send /agents to see them")
     if len(hits) > 1:
@@ -88,8 +96,10 @@ def split_ref(all_agents: list[Agent], words: str) -> tuple[Agent, str]:
             agent = find(all_agents, ref)
         except LookupError:
             continue
-        rest = " ".join(parts[i:])
-        if ref.isdigit() or agent.label.lower() == ref.lower():
+        # The prompt is the original text after the name, newlines and all.
+        rest = re.match(r"\s*(?:\S+\s+){%d}" % i, words).end()
+        rest = words[rest:]
+        if ref.isdecimal() or _norm(agent.label) == _norm(ref):
             exact = (agent, rest)
             partial = {k: v for k, v in partial.items() if v[0] > i}
         else:
