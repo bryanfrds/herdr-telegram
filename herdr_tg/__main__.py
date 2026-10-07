@@ -42,14 +42,38 @@ def skip_backlog(tg: Telegram) -> int | None:
     return pending[-1]["update_id"] + 1 if pending else None
 
 
+def watch_once(bot: Bot, tg: Telegram, primed: bool) -> bool:
+    """One check. Returns whether the bot has learned the starting states yet."""
+    try:
+        if not primed:
+            bot.prime()   # first look is quiet, so starting the bot sends nothing
+            return True
+        for notice in bot.changes():
+            tg.send(bot.owner, notice.text)
+            bot.commit(notice)   # only once delivered; otherwise it's offered again
+    except Exception as e:   # noqa: BLE001 - the watcher must outlive any one failure
+        print(f"watcher: {type(e).__name__}: {e}", file=sys.stderr)
+    return primed
+
+
 def watch(bot: Bot, tg: Telegram, every: float, stop: threading.Event) -> None:
-    bot.changes()   # learn the current states quietly, so startup sends nothing
+    primed = watch_once(bot, tg, False)
     while not stop.wait(every):
-        try:
-            for message in bot.changes():
-                tg.send(bot.owner, message)
-        except (herdr.HerdrError, TelegramError) as e:
-            print(f"watcher: {e}", file=sys.stderr)
+        primed = watch_once(bot, tg, primed)
+
+
+def handle_update(bot: Bot, tg: Telegram, update: dict) -> None:
+    msg = update.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    if chat_id is None:
+        return
+    try:
+        reply = bot.handle_message(msg)
+    except Exception as e:   # noqa: BLE001 - one bad message mustn't stop the bot
+        print(f"handle: {type(e).__name__}: {e}", file=sys.stderr)
+        reply = f"Something went wrong ({type(e).__name__}). The bot is still running."
+    if reply:
+        tg.send(chat_id, reply)
 
 
 def main() -> None:
@@ -74,10 +98,7 @@ def main() -> None:
             try:
                 for update in tg.updates(offset):
                     offset = update["update_id"] + 1
-                    msg = update.get("message") or {}
-                    reply = bot.handle(msg.get("chat", {}).get("id"), msg.get("text", ""))
-                    if reply:
-                        tg.send(msg["chat"]["id"], reply)
+                    handle_update(bot, tg, update)
             except TelegramError as e:
                 print(f"telegram: {e}; retrying in 5s", file=sys.stderr)
                 time.sleep(5)
