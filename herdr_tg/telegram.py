@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -17,17 +18,19 @@ class Telegram:
     def __init__(self, token: str, base: str = "https://api.telegram.org"):
         self._url = f"{base}/bot{token}/"
 
-    def _call(self, method: str, timeout: float, **params) -> object:
+    def _call(self, method: str, http_timeout: float, **params) -> object:
         req = urllib.request.Request(
             self._url + method, data=json.dumps(params).encode(),
             headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=http_timeout) as r:
                 reply = json.loads(r.read())
         except urllib.error.HTTPError as e:
             # The URL holds the token, so never let it reach a log or a message.
             raise TelegramError(f"{method} failed: HTTP {e.code}") from None
-        except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            # Dropped connections, timeouts, bad replies, and bad URLs (whose message
+            # would quote the token) all become one error that names only the kind.
             raise TelegramError(f"{method} failed: {type(e).__name__}") from None
         if not reply.get("ok"):
             raise TelegramError(f"{method} failed: {reply.get('description', 'unknown error')}")
@@ -38,11 +41,11 @@ class Telegram:
         params = {"timeout": wait, "allowed_updates": ["message"]}
         if offset is not None:
             params["offset"] = offset
-        return self._call("getUpdates", timeout=wait + 10, **params)
+        return self._call("getUpdates", http_timeout=wait + 10, **params)
 
     def send(self, chat_id: int, text: str) -> None:
         for part in split(text):
-            self._call("sendMessage", timeout=15, chat_id=chat_id, text=part)
+            self._call("sendMessage", http_timeout=15, chat_id=chat_id, text=part)
 
 
 def split(text: str, limit: int = LIMIT) -> list[str]:
