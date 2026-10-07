@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from herdr_tg import herdr as real_herdr
-from herdr_tg.bot import PROMPT_GRACE, Bot
+from herdr_tg.bot import PROMPT_GRACE, SETTLE, Bot
 from herdr_tg.herdr import Agent
 
 OWNER = 111
@@ -141,7 +141,9 @@ class Commands(unittest.TestCase):
 
     def test_prompts_keep_their_line_breaks_and_spacing(self):
         self.say("/to 2 fix this:\n\n    def f():\n        pass")
-        self.assertEqual(self.h.prompts, [("w2:p1", "fix this:\n\n    def f():\n        pass")])
+        self.say("/to 2\n    def g():\n        pass")
+        self.assertEqual(self.h.prompts, [("w2:p1", "fix this:\n\n    def f():\n        pass"),
+                                          ("w2:p1", "    def g():\n        pass")])
 
     def test_to_without_a_prompt_explains_itself(self):
         self.assertIn("Usage", self.say("/to 2"))
@@ -246,6 +248,19 @@ class Notifications(unittest.TestCase):
         self.bot.handle_message(msg("/to 2 quick one"))
         self.h.set_status("w2:p1", "working")
         self.h.set_status("w2:p1", "idle")       # never seen working by the watcher
+        self.assertEqual(self.deliver(), [])     # could be an unrelated flip: wait a little
+        self.clock.now += SETTLE + 1
+        self.assertIn("rex applicant finished", self.deliver()[0])
+
+    def test_an_unrelated_flip_right_after_a_prompt_is_not_a_finish(self):
+        # herdr's counter moves for unrelated idle/done changes too.
+        self.bot.handle_message(msg("/to 2 long job"))
+        self.h.set_status("w2:p1", "done")       # counter moved, never seen working
+        self.assertEqual(self.deliver(), [])
+        self.clock.now += SETTLE / 2
+        self.h.set_status("w2:p1", "working")    # the real turn starts
+        self.assertEqual(self.deliver(), [])
+        self.h.set_status("w2:p1", "idle")
         self.assertIn("rex applicant finished", self.deliver()[0])
 
     def test_a_prompt_that_never_starts_is_dropped_quietly(self):
