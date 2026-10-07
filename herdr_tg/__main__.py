@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from herdr_tg import herdr
-from herdr_tg.bot import Bot
+from herdr_tg.bot import COMMANDS, Bot, Reply
 from herdr_tg.telegram import Telegram, TelegramError
 
 CONFIG = Path.home() / ".config" / "herdr-telegram" / "config"
@@ -62,7 +62,26 @@ def watch(bot: Bot, tg: Telegram, every: float, stop: threading.Event) -> None:
         primed = watch_once(bot, tg, primed)
 
 
+def send_reply(tg: Telegram, chat_id: int, reply) -> None:
+    if isinstance(reply, Reply):
+        tg.send(chat_id, reply.text, reply.buttons)
+    elif reply:
+        tg.send(chat_id, reply)
+
+
 def handle_update(bot: Bot, tg: Telegram, update: dict) -> None:
+    cb = update.get("callback_query")
+    if cb:
+        chat_id = ((cb.get("message") or {}).get("chat") or {}).get("id")
+        try:
+            popup, reply = bot.handle_callback(cb)
+        except Exception as e:   # noqa: BLE001 - one bad tap mustn't stop the bot
+            print(f"callback: {type(e).__name__}: {e}", file=sys.stderr)
+            popup, reply = "Something went wrong", None
+        tg.answer(cb["id"], popup)   # always, or the button keeps spinning
+        if reply and chat_id is not None:
+            send_reply(tg, chat_id, reply)
+        return
     msg = update.get("message") or {}
     chat_id = (msg.get("chat") or {}).get("id")
     if chat_id is None:
@@ -72,8 +91,7 @@ def handle_update(bot: Bot, tg: Telegram, update: dict) -> None:
     except Exception as e:   # noqa: BLE001 - one bad message mustn't stop the bot
         print(f"handle: {type(e).__name__}: {e}", file=sys.stderr)
         reply = f"Something went wrong ({type(e).__name__}). The bot is still running."
-    if reply:
-        tg.send(chat_id, reply)
+    send_reply(tg, chat_id, reply)
 
 
 def main() -> None:
@@ -87,6 +105,7 @@ def main() -> None:
     while True:   # started at login, the network may not be up yet
         try:
             offset = skip_backlog(tg)
+            tg.set_commands(COMMANDS)
             break
         except TelegramError as e:
             print(f"telegram: {e}; retrying in 5s", file=sys.stderr)

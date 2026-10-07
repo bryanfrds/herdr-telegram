@@ -67,6 +67,21 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(FakeTelegram.sent[-1]["chat_id"], OWNER)
         self.assertIn("Sent to 2 · rex applicant", FakeTelegram.sent[-1]["text"])
 
+    def test_tapping_an_agent_button_over_real_http(self):
+        h = fleet()
+        bot = Bot(OWNER, h)
+        handle_update(bot, self.tg, {"update_id": 1, "message": msg("/agents")})
+        buttons = FakeTelegram.sent[-1]["reply_markup"]["inline_keyboard"]
+        rex_applicant = buttons[1][0]
+        self.assertEqual(rex_applicant["callback_data"], "use:w2:p1")
+        handle_update(bot, self.tg, {"update_id": 2, "callback_query": {
+            "id": "cb1", "data": rex_applicant["callback_data"], "from": {"id": OWNER},
+            "message": {"chat": {"id": OWNER, "type": "private"}}}})
+        self.assertEqual(FakeTelegram.sent[-2], {"callback_query_id": "cb1", "text": "rex applicant"})
+        self.assertIn("Now talking to 2 · rex applicant", FakeTelegram.sent[-1]["text"])
+        handle_update(bot, self.tg, {"update_id": 3, "message": msg("ship it")})
+        self.assertEqual(h.prompts, [("w2:p1", "ship it")])
+
 
 if __name__ == "__main__":
     unittest.main()

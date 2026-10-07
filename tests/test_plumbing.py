@@ -97,8 +97,27 @@ class TelegramTests(unittest.TestCase):
             got = Telegram("T").updates(offset=7, wait=25)
         self.assertEqual(got, [{"update_id": 1}])
         body = json.loads(op.call_args.args[0].data)
-        self.assertEqual(body, {"timeout": 25, "offset": 7, "allowed_updates": ["message"]})
+        self.assertEqual(body, {"timeout": 25, "offset": 7,
+                                "allowed_updates": ["message", "callback_query"]})
         self.assertEqual(op.call_args.kwargs["timeout"], 35)   # HTTP waits past the long poll
+
+    def test_buttons_go_under_the_last_part_only(self):
+        with mock.patch.object(telegram.urllib.request, "urlopen",
+                               return_value=FakeResponse({"ok": True, "result": {}})) as op:
+            Telegram("T").send(1, "a" * 5000, [[("Pick", "use:w1:p1")]])
+        bodies = [json.loads(c.args[0].data) for c in op.call_args_list]
+        self.assertNotIn("reply_markup", bodies[0])
+        self.assertEqual(bodies[-1]["reply_markup"],
+                         {"inline_keyboard": [[{"text": "Pick", "callback_data": "use:w1:p1"}]]})
+
+    def test_answer_and_command_menu_calls(self):
+        with mock.patch.object(telegram.urllib.request, "urlopen",
+                               return_value=FakeResponse({"ok": True, "result": True})) as op:
+            Telegram("T").answer("cb1", "ok")
+            Telegram("T").set_commands([("agents", "Pick an agent")])
+        a, c = (json.loads(x.args[0].data) for x in op.call_args_list)
+        self.assertEqual(a, {"callback_query_id": "cb1", "text": "ok"})
+        self.assertEqual(c, {"commands": [{"command": "agents", "description": "Pick an agent"}]})
 
     def test_a_dropped_connection_is_a_telegram_error(self):
         for exc in (ConnectionResetError(), telegram.http.client.RemoteDisconnected("x"),
@@ -177,6 +196,18 @@ class Loops(unittest.TestCase):
         handle_update(bot, tg, {"update_id": 2, "message": {"text": "hi"}})
         bot.handle_message.assert_not_called()
         tg.send.assert_not_called()
+
+    def test_a_tap_is_always_answered_and_its_reply_sent_with_buttons(self):
+        from herdr_tg.bot import Reply
+        bot, tg = mock.Mock(), mock.Mock()
+        bot.handle_callback.return_value = ("rex", Reply("Now talking", [[("Read", "read:p")]]))
+        handle_update(bot, tg, {"update_id": 1, "callback_query": {
+            "id": "cb9", "data": "use:p", "message": {"chat": {"id": 5}}}})
+        tg.answer.assert_called_once_with("cb9", "rex")
+        tg.send.assert_called_once_with(5, "Now talking", [[("Read", "read:p")]])
+        bot.handle_callback.side_effect = ValueError("boom")   # still answered
+        handle_update(bot, tg, {"update_id": 2, "callback_query": {"id": "cb10", "message": {}}})
+        tg.answer.assert_called_with("cb10", "Something went wrong")
 
     def test_a_crash_handling_one_message_is_reported_not_fatal(self):
         bot, tg = mock.Mock(), mock.Mock()
