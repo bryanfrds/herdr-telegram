@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -23,6 +24,9 @@ ICONS = {"working": "⏳", "idle": "✅", "done": "✅", "blocked": "✋", "unkn
 NOTIFY = {"idle": "finished", "done": "finished", "blocked": "needs your input"}
 # How long to wait for a prompted agent to show its new turn before giving up on it.
 PROMPT_GRACE = 120
+# herdr's state counter also moves for unrelated idle/done/session changes. If it
+# moved but the agent was never seen working, wait this long before calling it finished.
+SETTLE = 10
 
 
 @dataclass
@@ -39,8 +43,12 @@ class Bot:
         self.clock = clock
         self.current: str | None = None   # pane of the agent picked with /use
         self.last_status: dict[str, str] = {}
-        # Prompted agents whose new turn hasn't shown up yet: pane -> (seq at send, time).
-        self.expecting: dict[str, tuple[int, float]] = {}
+        # Prompted agents whose new turn hasn't shown up yet:
+        # pane -> (seq at send, time sent, when the seq first moved or None).
+        self.expecting: dict[str, tuple[int, float, float | None]] = {}
+        # The message loop and the watcher run on different threads and share the
+        # bookkeeping above, so they take turns.
+        self.lock = threading.RLock()
         # What each number meant in the last /agents, to catch numbers that moved since.
         self.shown: dict[int, str] = {}
 
@@ -58,7 +66,8 @@ class Bot:
             return None   # strangers get nothing, not even an error
         if any(k in msg for k in ("forward_origin", "forward_from", "forward_date", "via_bot")):
             return "Forwarded messages aren't sent to agents. Type it yourself."
-        return self.handle(msg.get("text") or "")
+        with self.lock:
+            return self.handle(msg.get("text") or "")
 
     def handle(self, text: str) -> str | None:
         text = text.strip()
@@ -131,7 +140,7 @@ class Bot:
                     f"/read {agent.number} to see it.")
         self.herdr.prompt(agent, prompt)
         # Watch for this turn: report it once herdr shows a change, even a quick one.
-        self.expecting[agent.pane] = (agent.seq, self.clock())
+        self.expecting[agent.pane] = (agent.seq, self.clock(), None)
         return f"Sent to {agent.name()}. I'll tell you when it's done."
 
     def read(self, rest: str) -> str:
@@ -154,19 +163,30 @@ class Bot:
             self.last_status[a.pane] = a.status
 
     def changes(self) -> list[Notice]:
+        with self.lock:
+            return self._changes()
+
+    def _changes(self) -> list[Notice]:
         """Agents that stopped working since the last check. Call commit() for each one
         once it has been delivered; an undelivered one is offered again next time."""
         out = []
         for a in self.herdr.agents():
             before = self.last_status.get(a.pane)
             if a.pane in self.expecting:
-                seq, since = self.expecting[a.pane]
-                if a.seq == seq and a.status != "working":
-                    # herdr hasn't shown the new turn yet; "idle" here is the old state.
-                    if self.clock() - since > PROMPT_GRACE:
-                        del self.expecting[a.pane]
-                        self.last_status[a.pane] = a.status
-                    continue
+                seq, sent, moved = self.expecting[a.pane]
+                now = self.clock()
+                if a.status not in ("working", "blocked"):
+                    if a.seq == seq:
+                        # herdr hasn't shown the new turn yet; "idle" is the old state.
+                        if now - sent > PROMPT_GRACE:
+                            del self.expecting[a.pane]
+                            self.last_status[a.pane] = a.status
+                        continue
+                    if moved is None or now - moved < SETTLE:
+                        # Changed, but never seen working: a quick job, or an unrelated
+                        # flip. Only call it finished if it stays that way a while.
+                        self.expecting[a.pane] = (seq, sent, moved if moved is not None else now)
+                        continue
                 del self.expecting[a.pane]
                 before = self.last_status[a.pane] = "working"
             if before == "working" and a.status in NOTIFY:
@@ -181,4 +201,5 @@ class Bot:
         return out
 
     def commit(self, notice: Notice) -> None:
-        self.last_status[notice.pane] = notice.status
+        with self.lock:
+            self.last_status[notice.pane] = notice.status
