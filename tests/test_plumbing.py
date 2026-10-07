@@ -159,6 +159,18 @@ class Loops(unittest.TestCase):
         bot.changes.side_effect = KeyError("agent_status")   # herdr's format changed
         self.assertTrue(watch_once(bot, tg, True))
 
+    def test_a_lock_guards_the_state_both_threads_share(self):
+        from herdr_tg.bot import Bot
+        bot = Bot(1, herdr=mock.Mock())
+        with bot.lock:   # held by "the other thread"
+            done = []
+            t = __import__("threading").Thread(target=lambda: done.append(bot.commit(mock.Mock(pane="p", status="idle"))))
+            t.start()
+            t.join(0.2)
+            self.assertEqual(done, [])   # commit waited for the lock
+        t.join(1)
+        self.assertEqual(done, [None])
+
     def test_updates_without_a_chat_are_skipped(self):
         bot, tg = mock.Mock(), mock.Mock()
         handle_update(bot, tg, {"update_id": 1})

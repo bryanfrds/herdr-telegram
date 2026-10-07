@@ -84,7 +84,13 @@ def main() -> None:
     owner = int(cfg["HERDR_TG_CHAT_ID"]) if cfg.get("HERDR_TG_CHAT_ID") else None
     tg = Telegram(token)
     bot = Bot(owner)
-    offset = skip_backlog(tg)
+    while True:   # started at login, the network may not be up yet
+        try:
+            offset = skip_backlog(tg)
+            break
+        except TelegramError as e:
+            print(f"telegram: {e}; retrying in 5s", file=sys.stderr)
+            time.sleep(5)
     stop = threading.Event()
     if owner is not None:
         threading.Thread(target=watch, args=(bot, tg, float(cfg.get("HERDR_TG_POLL", 5)), stop),
