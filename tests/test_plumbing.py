@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from herdr_tg import herdr, telegram
-from herdr_tg.__main__ import settings, skip_backlog
+from herdr_tg.__main__ import handle_update, settings, skip_backlog, watch_once
 from herdr_tg.telegram import Telegram, TelegramError, split
 
 
@@ -90,6 +90,28 @@ class TelegramTests(unittest.TestCase):
         self.assertNotIn("SECRET", str(ctx.exception))
         self.assertIsNone(ctx.exception.__cause__)
 
+    def test_updates_asks_telegram_to_wait_for_new_messages(self):
+        with mock.patch.object(telegram.urllib.request, "urlopen",
+                               return_value=FakeResponse({"ok": True, "result": [{"update_id": 1}]})
+                               ) as op:
+            got = Telegram("T").updates(offset=7, wait=25)
+        self.assertEqual(got, [{"update_id": 1}])
+        body = json.loads(op.call_args.args[0].data)
+        self.assertEqual(body, {"timeout": 25, "offset": 7, "allowed_updates": ["message"]})
+        self.assertEqual(op.call_args.kwargs["timeout"], 35)   # HTTP waits past the long poll
+
+    def test_a_dropped_connection_is_a_telegram_error(self):
+        for exc in (ConnectionResetError(), telegram.http.client.RemoteDisconnected("x"),
+                    TimeoutError()):
+            with mock.patch.object(telegram.urllib.request, "urlopen", side_effect=exc):
+                with self.assertRaises(TelegramError):
+                    Telegram("T").updates(None)
+
+    def test_a_malformed_token_never_appears_in_the_error(self):
+        with self.assertRaises(TelegramError) as ctx:
+            Telegram("SECRET with space").send(1, "x")   # http.client.InvalidURL quotes the URL
+        self.assertNotIn("SECRET", str(ctx.exception))
+
     def test_long_messages_split_on_lines_and_stay_under_the_limit(self):
         text = "\n".join("line %d %s" % (i, "x" * 50) for i in range(200))
         parts = split(text, 1000)
@@ -113,6 +135,42 @@ class Startup(unittest.TestCase):
         tg.updates.assert_called_once_with(offset=-1, wait=0)
         tg.updates.return_value = []
         self.assertIsNone(skip_backlog(tg))
+
+
+
+
+class Loops(unittest.TestCase):
+    def test_the_watcher_survives_herdr_being_down_at_startup(self):
+        bot, tg = mock.Mock(), mock.Mock()
+        bot.prime.side_effect = [herdr.HerdrError("not running"), None]
+        self.assertFalse(watch_once(bot, tg, False))   # still not primed, but alive
+        self.assertTrue(watch_once(bot, tg, False))
+
+    def test_the_watcher_survives_any_error_and_commits_only_after_sending(self):
+        bot, tg = mock.Mock(), mock.Mock()
+        notice = mock.Mock(text="done")
+        bot.changes.return_value = [notice]
+        tg.send.side_effect = TelegramError("offline")
+        self.assertTrue(watch_once(bot, tg, True))
+        bot.commit.assert_not_called()
+        tg.send.side_effect = None
+        watch_once(bot, tg, True)
+        bot.commit.assert_called_once_with(notice)
+        bot.changes.side_effect = KeyError("agent_status")   # herdr's format changed
+        self.assertTrue(watch_once(bot, tg, True))
+
+    def test_updates_without_a_chat_are_skipped(self):
+        bot, tg = mock.Mock(), mock.Mock()
+        handle_update(bot, tg, {"update_id": 1})
+        handle_update(bot, tg, {"update_id": 2, "message": {"text": "hi"}})
+        bot.handle_message.assert_not_called()
+        tg.send.assert_not_called()
+
+    def test_a_crash_handling_one_message_is_reported_not_fatal(self):
+        bot, tg = mock.Mock(), mock.Mock()
+        bot.handle_message.side_effect = ValueError("boom")
+        handle_update(bot, tg, {"update_id": 1, "message": {"chat": {"id": 5}, "text": "x"}})
+        self.assertIn("still running", tg.send.call_args.args[1])
 
 
 if __name__ == "__main__":
