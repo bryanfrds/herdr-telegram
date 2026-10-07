@@ -96,10 +96,13 @@ class Commands(unittest.TestCase):
     def say(self, text):
         return self.bot.handle_message(msg(text))
 
-    def test_agents_lists_each_with_its_status(self):
+    def test_agents_lists_each_with_its_status_and_a_button(self):
         reply = self.say("/agents")
-        self.assertIn("1 · Claude Maxxin (working)", reply)
-        self.assertIn("2 · rex applicant (idle)", reply)
+        self.assertIn("1 · Claude Maxxin (working)", reply.text)
+        self.assertIn("2 · rex applicant (idle)", reply.text)
+        self.assertEqual(reply.buttons, [[("⏳ 1 · Claude Maxxin", "use:w1:p1")],
+                                         [("✅ 2 · rex applicant", "use:w2:p1")],
+                                         [("✅ 3 · rex", "use:w3:p1")]])
 
     def test_to_sends_a_prompt_by_number_or_name(self):
         self.say("/to 2 fix the login bug")
@@ -194,12 +197,53 @@ class Commands(unittest.TestCase):
         self.assertIn("server not running", self.say("/agents"))
 
     def test_bot_suffix_on_commands_is_ignored(self):
-        self.assertIn("Claude Maxxin", self.say("/agents@MyHerdrBot"))
+        self.assertIn("Claude Maxxin", self.say("/agents@MyHerdrBot").text)
 
     def test_the_picked_agent_going_away_is_handled(self):
         self.say("/use 2")
         self.h.list = [a for a in self.h.list if a.pane != "w2:p1"]
         self.assertIn("has gone", self.say("hello"))
+
+
+def tap(data, chat=OWNER, sender=OWNER, kind="private"):
+    return {"id": "cb1", "data": data, "from": {"id": sender},
+            "message": {"chat": {"id": chat, "type": kind}}}
+
+
+class Buttons(unittest.TestCase):
+    def setUp(self):
+        self.h = fleet()
+        self.bot = Bot(OWNER, self.h)
+
+    def test_tapping_an_agent_makes_plain_messages_go_to_it(self):
+        popup, reply = self.bot.handle_callback(tap("use:w2:p1"))
+        self.assertEqual(popup, "rex applicant")
+        self.assertIn("Now talking to 2 · rex applicant", reply.text)
+        self.bot.handle_message(msg("run the tests"))
+        self.assertEqual(self.h.prompts, [("w2:p1", "run the tests")])
+
+    def test_the_read_button_shows_that_agents_screen(self):
+        self.h.screens["w2:p1"] = "❯ merge it"
+        _, reply = self.bot.handle_callback(tap("read:w2:p1"))
+        self.assertIn("❯ merge it", reply)
+
+    def test_a_button_for_an_agent_that_has_gone_says_so(self):
+        popup, reply = self.bot.handle_callback(tap("use:w9:p1"))
+        self.assertIn("gone", reply)
+        self.assertIsNone(self.bot.current)
+
+    def test_taps_from_anyone_else_or_in_groups_do_nothing(self):
+        for cb in (tap("use:w2:p1", chat=999, sender=999), tap("use:w2:p1", sender=999),
+                   tap("use:w2:p1", kind="group"), {"id": "x", "data": "use:w2:p1"}):
+            self.assertEqual(self.bot.handle_callback(cb), (None, None))
+        self.assertIsNone(self.bot.current)
+
+    def test_an_unpaired_bot_ignores_taps(self):
+        self.assertEqual(Bot(None, self.h).handle_callback(tap("use:w2:p1")), (None, None))
+
+    def test_unknown_button_data_is_ignored(self):
+        self.assertEqual(self.bot.handle_callback(tap("delete:w2:p1")), (None, None))
+        self.assertEqual(self.h.prompts, [])
 
 
 class Clock:
