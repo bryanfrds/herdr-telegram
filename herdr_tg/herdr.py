@@ -96,9 +96,12 @@ def split_ref(all_agents: list[Agent], words: str) -> tuple[Agent, str]:
             agent = find(all_agents, ref)
         except LookupError:
             continue
-        # The prompt is the original text after the name, newlines and all.
-        rest = re.match(r"\s*(?:\S+\s+){%d}" % i, words).end()
-        rest = words[rest:]
+        # The prompt is the original text after the name, newlines and indentation
+        # kept: drop the spaces after the name, and one line break if the prompt
+        # starts on the next line.
+        rest = words[re.match(r"\s*(?:\S+\s+){%d}" % (i - 1) + r"\S+", words).end():]
+        rest = rest.lstrip(" \t")
+        rest = rest[1:] if rest.startswith("\n") else rest
         if ref.isdecimal() or _norm(agent.label) == _norm(ref):
             exact = (agent, rest)
             partial = {k: v for k, v in partial.items() if v[0] > i}
