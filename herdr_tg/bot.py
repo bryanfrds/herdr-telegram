@@ -30,6 +30,17 @@ SETTLE = 10
 
 
 @dataclass
+class Reply:
+    text: str
+    buttons: list[list[tuple[str, str]]] | None = None   # rows of (label, callback data)
+
+
+# Shown in Telegram's "/" menu.
+COMMANDS = [("agents", "Pick an agent (buttons)"), ("read", "Latest screen of the picked agent"),
+            ("to", "Send one prompt: /to 2 fix the bug"), ("help", "How this works")]
+
+
+@dataclass
 class Notice:
     pane: str
     status: str
@@ -52,7 +63,33 @@ class Bot:
         # What each number meant in the last /agents, to catch numbers that moved since.
         self.shown: dict[int, str] = {}
 
-    def handle_message(self, msg: dict) -> str | None:
+    def is_owner(self, chat: dict, sender: int | None) -> bool:
+        return (chat.get("type") == "private" and self.owner is not None
+                and chat.get("id") == self.owner and sender == self.owner)
+
+    def handle_callback(self, cb: dict) -> tuple[str | None, str | Reply | None]:
+        """A tapped button: (short popup text, reply message). Strangers get nothing."""
+        message = cb.get("message") or {}
+        if not self.is_owner(message.get("chat") or {}, (cb.get("from") or {}).get("id")):
+            return None, None
+        action, _, pane = (cb.get("data") or "").partition(":")
+        with self.lock:
+            try:
+                agent = next((a for a in self.herdr.agents() if a.pane == pane), None)
+                if agent is None:
+                    return "Gone", "That agent has gone. Send /agents for the current list."
+                if action == "use":
+                    self.current = agent.pane
+                    return agent.label, Reply(
+                        f"Now talking to {agent.name()}. Type a message to send it there.",
+                        [[("📄 Read its screen", f"read:{agent.pane}")]])
+                if action == "read":
+                    return None, f"{agent.name()}:\n\n{self.herdr.read(agent, 30) or '(empty screen)'}"
+            except self.herdr.HerdrError as e:
+                return "herdr error", f"herdr: {e}"
+        return None, None
+
+    def handle_message(self, msg: dict) -> str | Reply | None:
         """The reply to one Telegram message, or None to stay silent."""
         chat = msg.get("chat") or {}
         sender = (msg.get("from") or {}).get("id")
@@ -69,7 +106,7 @@ class Bot:
         with self.lock:
             return self.handle(msg.get("text") or "")
 
-    def handle(self, text: str) -> str | None:
+    def handle(self, text: str) -> str | Reply | None:
         text = text.strip()
         if not text:
             return None
@@ -119,13 +156,16 @@ class Bot:
         self.current = None
         raise LookupError("The agent you picked has gone. Send /agents and /use another.")
 
-    def list_agents(self) -> str:
+    def list_agents(self) -> str | Reply:
         found = self.herdr.agents()
         self.shown = {a.number: a.pane for a in found}
         if not found:
             return "No agents are running in herdr."
-        return "\n".join(f"{ICONS.get(a.status, '·')} {a.name()} ({a.status})"
+        text = "\n".join(f"{ICONS.get(a.status, '·')} {a.name()} ({a.status})"
                          + (" ← current" if a.pane == self.current else "") for a in found)
+        # Buttons carry the pane, not the number, so a tap can't hit a renumbered space.
+        buttons = [[(f"{ICONS.get(a.status, '·')} {a.name()}", f"use:{a.pane}")] for a in found]
+        return Reply(text + "\n\nTap one to talk to it.", buttons)
 
     def use(self, ref: str) -> str:
         if not ref.strip():
