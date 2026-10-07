@@ -29,9 +29,15 @@ command-line API and to Telegram over HTTPS.
 | `/help` | The list above |
 
 Agents are named after their herdr space: by number (`2`) or by name (`rex applicant`,
-or just the start of it, `cla`). If your words could mean two agents (with spaces called
-`rex` and `rex applicant`, is `/to rex a quick fix` for `rex`?), the bot asks instead of
-guessing. A number is never ambiguous.
+or just the start of it, `cla`). A whole name beats a shorter one, so with spaces called
+`rex` and `rex applicant`, `/to rex applicant …` goes to rex applicant. When a partial
+name could mean another agent (is `/to rex a quick fix` for `rex`, or `rex a…`?), the bot
+asks instead of guessing.
+
+Numbers are never ambiguous, but they can move: closing a space renumbers the ones after
+it. If a number now points at a different agent than your last `/agents` showed, the bot
+refuses and asks you to check again. Two agents in the same space share its number and
+name, so split them into separate spaces to reach both.
 
 You get a message when an agent goes from working to finished (✅) or to waiting on a
 question (✋). The bot won't send a prompt to an agent that is waiting on a question;
@@ -64,16 +70,22 @@ Your Mac has to be awake for the bot to answer.
 
 This lets a phone type into coding agents, so it's built to fail closed:
 
-- **Only your chat.** Messages from any other chat get no reply and run nothing. An
-  unpaired bot only tells people their own chat id.
+- **Only you, only in a private chat.** The chat and the sender must both be you, and
+  groups are ignored, since everyone in a group could type into your agents. Anything
+  else gets no reply and runs nothing. An unpaired bot only tells people their own chat
+  id.
+- **Nothing forwarded.** Forwarded messages, and messages sent through another bot, are
+  refused, so a pasted message can't become a prompt by accident.
 - **No replay.** Messages sent while the bot was off are skipped at startup, so yesterday's
   `/to 2 …` doesn't fire when you restart it.
 - **No shell.** Prompts go to herdr as a single argument, never through a shell.
 - **The token stays secret.** Errors never include it, and `config` is git-ignored.
 
-Anyone who gets your token can impersonate the bot to you but still can't control your
-agents, since commands only come from your chat id. If the token leaks, revoke it in
-@BotFather.
+Someone with your token still can't control your agents, since commands only count from
+you. But they could read the commands you send, message you as the bot, or knock it
+offline, so treat the token like a password and revoke it in @BotFather if it leaks.
+Also bear in mind that prompts and screens pass through Telegram's servers, and bot chats
+aren't end-to-end encrypted.
 
 ## Tests
 
@@ -81,8 +93,9 @@ agents, since commands only come from your chat id. If the token leaks, revoke i
 python3 -m unittest discover -s tests -t .
 ```
 
-They use a fake herdr and a fake Telegram, so they never touch your real agents or send
-messages. GitHub runs them on every pull request.
+They use a fake herdr, and fake Telegram either in code or as a small local web server,
+so they never touch your real agents or send real messages. GitHub runs them on Python
+3.10 and 3.12 for every pull request.
 
 ## License
 
