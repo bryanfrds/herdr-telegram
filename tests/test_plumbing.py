@@ -10,7 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from herdr_tg import herdr, telegram
-from herdr_tg.__main__ import handle_update, settings, skip_backlog, watch_once
+from herdr_tg.__main__ import (BAD_TOKEN, connect, handle_update, main, poll_once, settings,
+                               skip_backlog, watch_once)
 from herdr_tg.telegram import Telegram, TelegramError, split
 
 
@@ -89,6 +90,12 @@ class TelegramTests(unittest.TestCase):
                 Telegram("SECRET").send(1, "x")
         self.assertNotIn("SECRET", str(ctx.exception))
         self.assertIsNone(ctx.exception.__cause__)
+        self.assertTrue(ctx.exception.bad_token)
+
+    def test_only_a_refused_token_counts_as_a_bad_token(self):
+        self.assertTrue(TelegramError("x", 404).bad_token)   # Telegram's answer to an unknown bot
+        for status in (None, 429, 500, 502):
+            self.assertFalse(TelegramError("x", status).bad_token)
 
     def test_updates_asks_telegram_to_wait_for_new_messages(self):
         with mock.patch.object(telegram.urllib.request, "urlopen",
@@ -155,6 +162,58 @@ class Startup(unittest.TestCase):
         tg.updates.return_value = []
         self.assertIsNone(skip_backlog(tg))
 
+    def test_a_refused_token_stops_with_a_clear_message_instead_of_retrying(self):
+        tg = mock.Mock()
+        tg.updates.side_effect = TelegramError("getUpdates failed: HTTP 401", 401)
+        retried = AssertionError("retried a refused token")
+        with mock.patch("sys.stderr") as err, mock.patch("time.sleep", side_effect=retried):
+            with self.assertRaises(SystemExit) as ctx:
+                connect(tg)
+        self.assertEqual(ctx.exception.code, BAD_TOKEN)
+        self.assertIn("@BotFather", "".join(c.args[0] for c in err.write.call_args_list))
+
+    def test_startup_waits_out_the_network_then_carries_on(self):
+        tg = mock.Mock()
+        tg.updates.side_effect = [TelegramError("getUpdates failed: URLError"),
+                                  TelegramError("getUpdates failed: HTTP 502", 502),
+                                  [{"update_id": 9}]]
+        with mock.patch("sys.stderr"), mock.patch("time.sleep") as sleep:
+            self.assertEqual(connect(tg), 10)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_a_token_revoked_while_running_stops_the_bot(self):
+        tg = mock.Mock()
+        tg.updates.side_effect = TelegramError("getUpdates failed: HTTP 401", 401)
+        retried = AssertionError("retried a refused token")
+        with mock.patch("sys.stderr"), mock.patch("time.sleep", side_effect=retried):
+            with self.assertRaises(SystemExit) as ctx:
+                poll_once(mock.Mock(), tg, 5)
+        self.assertEqual(ctx.exception.code, BAD_TOKEN)
+
+    def test_polling_waits_out_a_server_error_and_keeps_its_place(self):
+        bot, tg = mock.Mock(), mock.Mock()
+        tg.updates.side_effect = TelegramError("getUpdates failed: HTTP 502", 502)
+        with mock.patch("sys.stderr"), mock.patch("time.sleep") as sleep:
+            self.assertEqual(poll_once(bot, tg, 5), 5)
+        sleep.assert_called_once_with(5)
+        tg.updates.side_effect = None
+        tg.updates.return_value = [{"update_id": 8}]
+        self.assertEqual(poll_once(bot, tg, 5), 9)
+
+    def test_ctrl_c_stops_quietly(self):
+        with mock.patch("herdr_tg.__main__.run", side_effect=KeyboardInterrupt), \
+                mock.patch("sys.stderr") as err:
+            main()   # no traceback
+        self.assertIn("stopped", "".join(c.args[0] for c in err.write.call_args_list))
+
+    def test_a_failed_command_menu_never_blocks_startup(self):
+        tg = mock.Mock()
+        tg.updates.return_value = []
+        tg.set_commands.side_effect = TelegramError("setMyCommands failed: HTTP 400", 400)
+        with mock.patch("sys.stderr"), mock.patch("time.sleep") as sleep:
+            self.assertIsNone(connect(tg))
+        tg.updates.assert_called_once()
+        sleep.assert_not_called()
 
 
 
@@ -208,6 +267,15 @@ class Loops(unittest.TestCase):
         bot.handle_callback.side_effect = ValueError("boom")   # still answered
         handle_update(bot, tg, {"update_id": 2, "callback_query": {"id": "cb10", "message": {}}})
         tg.answer.assert_called_with("cb10", "Something went wrong")
+
+    def test_a_tap_that_cant_be_acknowledged_still_gets_its_reply(self):
+        bot, tg = mock.Mock(), mock.Mock()
+        bot.handle_callback.return_value = (None, "screen")
+        tg.answer.side_effect = TelegramError("answerCallbackQuery failed: HTTP 400", 400)
+        with mock.patch("sys.stderr"):
+            handle_update(bot, tg, {"update_id": 1, "callback_query": {
+                "id": "old", "data": "read:p", "message": {"chat": {"id": 5}}}})
+        tg.send.assert_called_once_with(5, "screen")
 
     def test_a_crash_handling_one_message_is_reported_not_fatal(self):
         bot, tg = mock.Mock(), mock.Mock()
