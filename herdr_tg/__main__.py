@@ -99,7 +99,7 @@ def handle_update(bot: Bot, tg: Telegram, update: dict) -> None:
     send_reply(tg, chat_id, reply)
 
 
-BAD_TOKEN = 78   # EX_CONFIG: a setup problem, so a supervisor shouldn't keep restarting it
+BAD_TOKEN = 78   # EX_CONFIG: a setup problem, not a crash
 
 
 def connect(tg: Telegram) -> int | None:
@@ -120,6 +120,22 @@ def connect(tg: Telegram) -> int | None:
         tg.set_commands(COMMANDS)   # only the "/" menu; never worth failing over
     except TelegramError as e:
         print(f"telegram: couldn't set the command menu ({e})", file=sys.stderr)
+    return offset
+
+
+def poll_once(bot: Bot, tg: Telegram, offset: int | None) -> int | None:
+    """Handle one batch of updates and return the next offset. A token revoked while
+    running stops the bot; anything else is waited out."""
+    try:
+        for update in tg.updates(offset):
+            offset = update["update_id"] + 1
+            handle_update(bot, tg, update)
+    except TelegramError as e:
+        if e.bad_token:
+            print(f"telegram refused the bot token ({e}). Stopping.", file=sys.stderr)
+            sys.exit(BAD_TOKEN)
+        print(f"telegram: {e}; retrying in 5s", file=sys.stderr)
+        time.sleep(5)
     return offset
 
 
@@ -149,16 +165,7 @@ def run() -> None:
               file=sys.stderr)
     try:
         while True:
-            try:
-                for update in tg.updates(offset):
-                    offset = update["update_id"] + 1
-                    handle_update(bot, tg, update)
-            except TelegramError as e:
-                if e.bad_token:   # revoked while running
-                    print(f"telegram refused the bot token ({e}). Stopping.", file=sys.stderr)
-                    sys.exit(BAD_TOKEN)
-                print(f"telegram: {e}; retrying in 5s", file=sys.stderr)
-                time.sleep(5)
+            offset = poll_once(bot, tg, offset)
     finally:
         stop.set()
 

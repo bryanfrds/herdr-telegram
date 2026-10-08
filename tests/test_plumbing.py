@@ -10,7 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from herdr_tg import herdr, telegram
-from herdr_tg.__main__ import BAD_TOKEN, connect, handle_update, settings, skip_backlog, watch_once
+from herdr_tg.__main__ import (BAD_TOKEN, connect, handle_update, main, poll_once, settings,
+                               skip_backlog, watch_once)
 from herdr_tg.telegram import Telegram, TelegramError, split
 
 
@@ -179,6 +180,31 @@ class Startup(unittest.TestCase):
         with mock.patch("sys.stderr"), mock.patch("time.sleep") as sleep:
             self.assertEqual(connect(tg), 10)
         self.assertEqual(sleep.call_count, 2)
+
+    def test_a_token_revoked_while_running_stops_the_bot(self):
+        tg = mock.Mock()
+        tg.updates.side_effect = TelegramError("getUpdates failed: HTTP 401", 401)
+        retried = AssertionError("retried a refused token")
+        with mock.patch("sys.stderr"), mock.patch("time.sleep", side_effect=retried):
+            with self.assertRaises(SystemExit) as ctx:
+                poll_once(mock.Mock(), tg, 5)
+        self.assertEqual(ctx.exception.code, BAD_TOKEN)
+
+    def test_polling_waits_out_a_server_error_and_keeps_its_place(self):
+        bot, tg = mock.Mock(), mock.Mock()
+        tg.updates.side_effect = TelegramError("getUpdates failed: HTTP 502", 502)
+        with mock.patch("sys.stderr"), mock.patch("time.sleep") as sleep:
+            self.assertEqual(poll_once(bot, tg, 5), 5)
+        sleep.assert_called_once_with(5)
+        tg.updates.side_effect = None
+        tg.updates.return_value = [{"update_id": 8}]
+        self.assertEqual(poll_once(bot, tg, 5), 9)
+
+    def test_ctrl_c_stops_quietly(self):
+        with mock.patch("herdr_tg.__main__.run", side_effect=KeyboardInterrupt), \
+                mock.patch("sys.stderr") as err:
+            main()   # no traceback
+        self.assertIn("stopped", "".join(c.args[0] for c in err.write.call_args_list))
 
     def test_a_failed_command_menu_never_blocks_startup(self):
         tg = mock.Mock()
