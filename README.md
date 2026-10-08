@@ -70,6 +70,16 @@ question (✋). The bot won't send a prompt to an agent that is waiting on a que
 
 Your Mac has to be awake for the bot to answer.
 
+### Start it at login
+
+```bash
+scripts/autostart.sh          # start now and at every login; restarts it if it stops
+scripts/autostart.sh remove   # undo
+```
+
+Logs go to `~/Library/Logs/herdr-telegram.log`. If Telegram refuses the token, the bot
+says so there and stops instead of retrying; fix the config and it picks up within a minute.
+
 ## Safety
 
 This lets a phone type into coding agents, so it's built to fail closed:
