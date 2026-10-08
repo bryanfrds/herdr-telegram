@@ -78,7 +78,12 @@ def handle_update(bot: Bot, tg: Telegram, update: dict) -> None:
         except Exception as e:   # noqa: BLE001 - one bad tap mustn't stop the bot
             print(f"callback: {type(e).__name__}: {e}", file=sys.stderr)
             popup, reply = "Something went wrong", None
-        tg.answer(cb["id"], popup)   # always, or the button keeps spinning
+        try:
+            tg.answer(cb.get("id"), popup)   # always, or the button keeps spinning
+        except TelegramError as e:
+            # Usually "query is too old" after a slow herdr call. The tap still
+            # happened, so send its reply anyway.
+            print(f"answer: {e}", file=sys.stderr)
         if reply and chat_id is not None:
             send_reply(tg, chat_id, reply)
         return
@@ -94,7 +99,38 @@ def handle_update(bot: Bot, tg: Telegram, update: dict) -> None:
     send_reply(tg, chat_id, reply)
 
 
+BAD_TOKEN = 78   # EX_CONFIG: a setup problem, so a supervisor shouldn't keep restarting it
+
+
+def connect(tg: Telegram) -> int | None:
+    """Skip the backlog, retrying until Telegram is reachable. A refused token stops
+    here with a clear message instead of retrying forever."""
+    while True:   # started at login, the network may not be up yet
+        try:
+            offset = skip_backlog(tg)
+            break
+        except TelegramError as e:
+            if e.bad_token:
+                print(f"telegram refused the bot token ({e}). Check HERDR_TG_TOKEN in "
+                      f"{CONFIG}, or get a new one from @BotFather.", file=sys.stderr)
+                sys.exit(BAD_TOKEN)
+            print(f"telegram: {e}; retrying in 5s", file=sys.stderr)
+            time.sleep(5)
+    try:
+        tg.set_commands(COMMANDS)   # only the "/" menu; never worth failing over
+    except TelegramError as e:
+        print(f"telegram: couldn't set the command menu ({e})", file=sys.stderr)
+    return offset
+
+
 def main() -> None:
+    try:
+        run()
+    except KeyboardInterrupt:
+        print("herdr-telegram: stopped.", file=sys.stderr)
+
+
+def run() -> None:
     cfg = settings()
     token = cfg.get("HERDR_TG_TOKEN")
     if not token:
@@ -102,14 +138,7 @@ def main() -> None:
     owner = int(cfg["HERDR_TG_CHAT_ID"]) if cfg.get("HERDR_TG_CHAT_ID") else None
     tg = Telegram(token)
     bot = Bot(owner)
-    while True:   # started at login, the network may not be up yet
-        try:
-            offset = skip_backlog(tg)
-            tg.set_commands(COMMANDS)
-            break
-        except TelegramError as e:
-            print(f"telegram: {e}; retrying in 5s", file=sys.stderr)
-            time.sleep(5)
+    offset = connect(tg)
     stop = threading.Event()
     if owner is not None:
         threading.Thread(target=watch, args=(bot, tg, float(cfg.get("HERDR_TG_POLL", 5)), stop),
@@ -125,9 +154,12 @@ def main() -> None:
                     offset = update["update_id"] + 1
                     handle_update(bot, tg, update)
             except TelegramError as e:
+                if e.bad_token:   # revoked while running
+                    print(f"telegram refused the bot token ({e}). Stopping.", file=sys.stderr)
+                    sys.exit(BAD_TOKEN)
                 print(f"telegram: {e}; retrying in 5s", file=sys.stderr)
                 time.sleep(5)
-    except KeyboardInterrupt:
+    finally:
         stop.set()
 
 
