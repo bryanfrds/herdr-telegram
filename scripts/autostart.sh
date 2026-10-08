@@ -58,9 +58,10 @@ launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 mv "$NEW" "$PLIST"
 # launchd can refuse for a moment while the old copy finishes unloading.
 tries=0
-until launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; do
+until err=$(launchctl bootstrap "$DOMAIN" "$PLIST" 2>&1); do
     tries=$((tries + 1))
-    [ "$tries" -lt 5 ] || { echo "launchctl couldn't start it; try again in a few seconds." >&2; exit 1; }
+    [ "$tries" -lt 5 ] || {
+        echo "launchctl couldn't start it ($err); try again in a few seconds." >&2; exit 1; }
     sleep 1
 done
 echo "Installed. herdr-telegram is running and will start at login."

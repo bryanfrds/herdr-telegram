@@ -200,10 +200,30 @@ class Startup(unittest.TestCase):
         tg.updates.return_value = [{"update_id": 8}]
         self.assertEqual(poll_once(bot, tg, 5), 9)
 
+    def test_the_loop_moves_past_handled_messages(self):
+        from herdr_tg import __main__ as m
+        seen = []
+
+        def poll(bot, tg, offset):
+            seen.append(offset)
+            if len(seen) == 3:
+                raise KeyboardInterrupt
+            return (offset or 0) + 1
+
+        with mock.patch.object(m, "settings", return_value={"HERDR_TG_TOKEN": "T"}), \
+                mock.patch.object(m, "connect", return_value=7), \
+                mock.patch.object(m, "poll_once", side_effect=poll), mock.patch("sys.stderr"):
+            with self.assertRaises(KeyboardInterrupt):
+                m.run()
+        self.assertEqual(seen, [7, 8, 9])
+
     def test_ctrl_c_stops_quietly(self):
         with mock.patch("herdr_tg.__main__.run", side_effect=KeyboardInterrupt), \
                 mock.patch("sys.stderr") as err:
-            main()   # no traceback
+            try:
+                main()
+            except KeyboardInterrupt:
+                self.fail("Ctrl-C escaped main() as a traceback")
         self.assertIn("stopped", "".join(c.args[0] for c in err.write.call_args_list))
 
     def test_a_failed_command_menu_never_blocks_startup(self):
