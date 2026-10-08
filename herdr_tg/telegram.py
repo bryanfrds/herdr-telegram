@@ -11,7 +11,14 @@ LIMIT = 4096  # Telegram's maximum message length
 
 
 class TelegramError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status   # the HTTP status, when Telegram answered at all
+
+    @property
+    def bad_token(self) -> bool:
+        """Telegram refused the token itself: retrying won't help."""
+        return self.status in (401, 404)
 
 
 class Telegram:
@@ -27,7 +34,7 @@ class Telegram:
                 reply = json.loads(r.read())
         except urllib.error.HTTPError as e:
             # The URL holds the token, so never let it reach a log or a message.
-            raise TelegramError(f"{method} failed: HTTP {e.code}") from None
+            raise TelegramError(f"{method} failed: HTTP {e.code}", e.code) from None
         except (OSError, http.client.HTTPException, ValueError) as e:
             # Dropped connections, timeouts, bad replies, and bad URLs (whose message
             # would quote the token) all become one error that names only the kind.
