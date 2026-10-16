@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from herdr_tg import herdr as real_herdr
-from herdr_tg.bot import PROMPT_GRACE, SETTLE, Bot
+from herdr_tg.bot import PROMPT_GRACE, SETTLE, Bot, reply_tail
 from herdr_tg.herdr import Agent
 
 OWNER = 111
@@ -327,6 +327,39 @@ class Notifications(unittest.TestCase):
 
     def test_idle_agents_staying_idle_say_nothing(self):
         self.assertEqual(self.deliver(), [])
+
+
+# A Claude Code screen: the reply, the turn-end line, then the input box and a pet widget.
+SCREEN = """  Older reply.
+
+✻ Crunched for 4s · done 1:15 PM
+
+  Here's what's left:
+
+  1. Turn on the payments database.
+  2. Review PR #36.
+
+✻ Worked for 19s · done 4:49 PM
+
+[-]
+Lv 42
+✔ Update installed · /restart to apply
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  repo [Opus 5.5] | 61% left"""
+
+
+class ReplyTailTest(unittest.TestCase):
+    def test_the_last_reply_not_the_input_box(self):
+        self.assertEqual(reply_tail(SCREEN), "  Older reply.\n  Here's what's left:\n"
+                         "  1. Turn on the payments database.\n  2. Review PR #36.")
+
+    def test_only_the_last_lines_of_a_long_reply(self):
+        self.assertEqual(reply_tail(SCREEN, 2), "  1. Turn on the payments database.\n  2. Review PR #36.")
+
+    def test_a_screen_with_no_turn_end_keeps_its_last_lines_without_frames(self):
+        self.assertEqual(reply_tail("$ ls\na.txt\n────\n❯\n", 5), "$ ls\na.txt")
 
 
 if __name__ == "__main__":
