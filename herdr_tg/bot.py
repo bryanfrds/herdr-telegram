@@ -36,12 +36,12 @@ FRAME = re.compile(r"^[\s─━_│|❯>›-]*$")
 
 
 def reply_tail(screen: str, lines: int = 12) -> str:
-    """The end of the agent's last reply: the lines just above its last turn-end line,
+    """The end of the agent's last reply: the lines between its last two turn-end lines,
     without frame lines. With no turn-end line on screen, the screen's last lines."""
     rows = screen.splitlines()
     ends = [i for i, row in enumerate(rows) if TURN_END.match(row)]
     if ends:
-        rows = rows[:ends[-1]]
+        rows = rows[ends[-2] + 1 if len(ends) > 1 else 0:ends[-1]]
     text = [row.rstrip() for row in rows if not FRAME.match(row)]
     return "\n".join(text[-lines:])
 

@@ -352,8 +352,11 @@ Lv 42
 
 class ReplyTailTest(unittest.TestCase):
     def test_the_last_reply_not_the_input_box(self):
-        self.assertEqual(reply_tail(SCREEN), "  Older reply.\n  Here's what's left:\n"
+        self.assertEqual(reply_tail(SCREEN), "  Here's what's left:\n"
                          "  1. Turn on the payments database.\n  2. Review PR #36.")
+
+    def test_one_turn_end_keeps_everything_above_it(self):
+        self.assertEqual(reply_tail("  Only reply.\n✻ Worked for 2s · done 9:00 AM\n❯"), "  Only reply.")
 
     def test_only_the_last_lines_of_a_long_reply(self):
         self.assertEqual(reply_tail(SCREEN, 2), "  1. Turn on the payments database.\n  2. Review PR #36.")
