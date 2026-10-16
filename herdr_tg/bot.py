@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -27,6 +28,35 @@ PROMPT_GRACE = 120
 # herdr's state counter also moves for unrelated idle/done/session changes. If it
 # moved but the agent was never seen working, wait this long before calling it finished.
 SETTLE = 10
+# Claude Code ends each turn with a line like "✻ Worked for 1m 3s · done 4:49 PM". The
+# turn is above it (your prompt, then the reply); below it are the input box, the status
+# bar and any mod widgets. The duration keeps a reply line like "- Searched for leaks ·
+# done" from matching.
+TURN_END = re.compile(r"^\s*\S\s+\w+ for (?:\d+[hms]\s*)+· done\b")
+# Rules, box edges and the prompt mark: the input box's frame, not text.
+FRAME = re.compile(r"^\s*[─━_│❯>›]+\s*$")
+
+
+def tidy(rows: list[str], lines: int) -> str:
+    """The last `lines` rows without frame lines, blank runs squeezed to one blank."""
+    out: list[str] = []
+    for row in (r.rstrip() for r in rows):
+        if FRAME.match(row) or (not row and (not out or not out[-1])):
+            continue
+        out.append(row)
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out[-lines:]).strip("\n")
+
+
+def reply_tail(screen: str, lines: int = 12) -> str:
+    """The end of the agent's last finished turn: the rows between its last two turn-end
+    lines. With no turn-end line on screen, the screen's last rows."""
+    rows = screen.splitlines()
+    ends = [i for i, row in enumerate(rows) if TURN_END.match(row)]
+    if ends:
+        rows = rows[ends[-2] + 1 if len(ends) > 1 else 0:ends[-1]]
+    return tidy(rows, lines)
 
 
 @dataclass
@@ -231,7 +261,10 @@ class Bot:
                 before = self.last_status[a.pane] = "working"
             if before == "working" and a.status in NOTIFY:
                 try:
-                    tail = "\n\n" + self.herdr.read(a, 12)
+                    # A blocked agent's question has no turn-end line under it yet, so
+                    # it gets the bottom of the screen; a finished one gets its reply.
+                    screen = self.herdr.read(a, 80)
+                    tail = "\n\n" + (tidy(screen.splitlines(), 12) if a.status == "blocked" else reply_tail(screen))
                 except self.herdr.HerdrError:
                     tail = ""
                 out.append(Notice(a.pane, a.status,

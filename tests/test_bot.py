@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from herdr_tg import herdr as real_herdr
-from herdr_tg.bot import PROMPT_GRACE, SETTLE, Bot
+from herdr_tg.bot import PROMPT_GRACE, SETTLE, Bot, reply_tail
 from herdr_tg.herdr import Agent
 
 OWNER = 111
@@ -279,6 +279,20 @@ class Notifications(unittest.TestCase):
         self.h.set_status("w1:p1", "blocked")
         self.assertIn("needs your input", self.deliver()[0])
 
+    def test_a_finished_agent_sends_its_reply_not_the_input_box(self):
+        self.h.screens["w1:p1"] = SCREEN
+        self.h.set_status("w1:p1", "idle")
+        self.assertEqual(self.deliver(), ["✅ 1 · Claude Maxxin finished.\n\n" + REPLY])
+
+    def test_a_blocked_agent_sends_its_question_not_the_last_reply(self):
+        # The waiting turn has no turn-end line yet, so the older one must not be used.
+        self.h.screens["w1:p1"] = "  Old reply.\n✻ Worked for 3s · done 9:00 AM\n  Fix it\n" \
+                                  "  Allow edit to bot.py?\n  ❯ 1. Yes\n    2. No"
+        self.h.set_status("w1:p1", "blocked")
+        notice = self.deliver()[0]
+        self.assertIn("Allow edit to bot.py?", notice)
+        self.assertIn("❯ 1. Yes", notice)
+
     def test_no_false_finish_before_the_prompted_agent_starts(self):
         # herdr may still say "idle" for a moment after accepting a prompt.
         self.bot.handle_message(msg("/to 2 long job"))
@@ -327,6 +341,51 @@ class Notifications(unittest.TestCase):
 
     def test_idle_agents_staying_idle_say_nothing(self):
         self.assertEqual(self.deliver(), [])
+
+
+# A Claude Code screen: the reply, the turn-end line, then the input box and a pet widget.
+SCREEN = """  Older reply.
+
+✻ Crunched for 4s · done 1:15 PM
+
+  Here's what's left:
+
+  1. Turn on the payments database.
+  2. Review PR #36.
+
+✻ Worked for 19s · done 4:49 PM
+
+[-]
+Lv 42
+✔ Update installed · /restart to apply
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  repo [Opus 5.5] | 61% left"""
+
+
+REPLY = "  Here's what's left:\n\n  1. Turn on the payments database.\n  2. Review PR #36."
+
+
+class ReplyTailTest(unittest.TestCase):
+    def test_the_last_reply_not_the_input_box(self):
+        self.assertEqual(reply_tail(SCREEN), REPLY)
+
+    def test_one_turn_end_keeps_everything_above_it(self):
+        self.assertEqual(reply_tail("  Only reply.\n✻ Worked for 2s · done 9:00 AM\n❯"), "  Only reply.")
+
+    def test_only_the_last_lines_of_a_long_reply(self):
+        self.assertEqual(reply_tail(SCREEN, 2), "  1. Turn on the payments database.\n  2. Review PR #36.")
+
+    def test_a_reply_line_that_says_for_and_done_is_not_a_turn_end(self):
+        self.assertEqual(reply_tail("  - Searched for leaks · done\n✻ Worked for 2s · done 9:00 AM"),
+                         "  - Searched for leaks · done")
+
+    def test_blank_runs_squeeze_to_one(self):
+        self.assertEqual(reply_tail("  A.\n\n\n\n  B.\n✻ Worked for 2s · done 9:00 AM"), "  A.\n\n  B.")
+
+    def test_a_screen_with_no_turn_end_keeps_its_last_lines_without_frames(self):
+        self.assertEqual(reply_tail("$ ls\na.txt\n────\n❯\n", 5), "$ ls\na.txt")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ you:  /to 2 run the tests and fix anything that fails
 bot:  Sent to 2 · rex applicant. I'll tell you when it's done.
       … a few minutes later …
 bot:  ✅ 2 · rex applicant finished.
-      (the last lines of its screen)
+      (the end of its reply; for "needs your input", the question)
 ```
 
 No server, no open ports, nothing to install: it's plain Python 3.10+ talking to herdr's
