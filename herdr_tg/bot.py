@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -27,6 +28,22 @@ PROMPT_GRACE = 120
 # herdr's state counter also moves for unrelated idle/done/session changes. If it
 # moved but the agent was never seen working, wait this long before calling it finished.
 SETTLE = 10
+# Claude Code ends each turn with a line like "✻ Worked for 19s · done 4:49 PM". The
+# reply is above it; below it are the input box, the status bar and any mod widgets.
+TURN_END = re.compile(r"^\s*\S\s+\w+ for [^·]+· done\b")
+# Rules, box edges and the prompt mark: the input box's frame, not text.
+FRAME = re.compile(r"^[\s─━_│|❯>›-]*$")
+
+
+def reply_tail(screen: str, lines: int = 12) -> str:
+    """The end of the agent's last reply: the lines just above its last turn-end line,
+    without frame lines. With no turn-end line on screen, the screen's last lines."""
+    rows = screen.splitlines()
+    ends = [i for i, row in enumerate(rows) if TURN_END.match(row)]
+    if ends:
+        rows = rows[:ends[-1]]
+    text = [row.rstrip() for row in rows if not FRAME.match(row)]
+    return "\n".join(text[-lines:])
 
 
 @dataclass
@@ -231,7 +248,7 @@ class Bot:
                 before = self.last_status[a.pane] = "working"
             if before == "working" and a.status in NOTIFY:
                 try:
-                    tail = "\n\n" + self.herdr.read(a, 12)
+                    tail = "\n\n" + reply_tail(self.herdr.read(a, 80))
                 except self.herdr.HerdrError:
                     tail = ""
                 out.append(Notice(a.pane, a.status,
