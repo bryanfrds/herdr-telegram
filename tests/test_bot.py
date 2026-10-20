@@ -384,6 +384,11 @@ class ReplyTailTest(unittest.TestCase):
     def test_blank_runs_squeeze_to_one(self):
         self.assertEqual(reply_tail("  A.\n\n\n\n  B.\n✻ Worked for 2s · done 9:00 AM"), "  A.\n\n  B.")
 
+    def test_the_time_under_a_prompt_is_dropped_but_a_time_in_the_reply_stays(self):
+        screen = ("❯ when is standup?\n" + " " * 200 + "17:42\n" + " " * 150 + "5:42 PM\n"
+                  "  Standup is at\n  9:30\n✻ Worked for 2s · done 5:42 PM")
+        self.assertEqual(reply_tail(screen), "❯ when is standup?\n  Standup is at\n  9:30")
+
     def test_a_screen_with_no_turn_end_keeps_its_last_lines_without_frames(self):
         self.assertEqual(reply_tail("$ ls\na.txt\n────\n❯\n", 5), "$ ls\na.txt")
 
