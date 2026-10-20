@@ -35,13 +35,16 @@ SETTLE = 10
 TURN_END = re.compile(r"^\s*\S\s+\w+ for (?:\d+[hms]\s*)+· done\b")
 # Rules, box edges and the prompt mark: the input box's frame, not text.
 FRAME = re.compile(r"^\s*[─━_│❯>›]+\s*$")
+# The time Claude Code right-aligns under each prompt ("<200 spaces>17:42"). In Telegram it's
+# a wide run of blank space. A time at the start of a line is reply text and stays.
+TIME_ROW = re.compile(r"^\s{20,}\d{1,2}:\d{2}(?:\s*[AP]M)?$")
 
 
 def tidy(rows: list[str], lines: int) -> str:
-    """The last `lines` rows without frame lines, blank runs squeezed to one blank."""
+    """The last `lines` rows without frame lines or time rows, blank runs squeezed to one blank."""
     out: list[str] = []
     for row in (r.rstrip() for r in rows):
-        if FRAME.match(row) or (not row and (not out or not out[-1])):
+        if FRAME.match(row) or TIME_ROW.match(row) or (not row and (not out or not out[-1])):
             continue
         out.append(row)
     while out and not out[-1]:
